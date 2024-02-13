@@ -3,6 +3,7 @@
         "types.h": "c",
         "unistd.h": "c",
         "string.h": "c",
-        "stdbool.h": "c"
+        "stdbool.h": "c",
+        "format": "c"
     }
 }

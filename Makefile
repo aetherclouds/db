@@ -1,5 +1,7 @@
+.PHONY: run
 run: build
 	./meinsql
 
+.PHONY: build
 build:
-	gcc -fdiagnostics-color=always -Wall -Wextra -g meinsql.c -o meinsql.out
+	gcc -fdiagnostics-color=always -Wall -Wextra -g src/meinsql.c -o meinsql -std=c2x
