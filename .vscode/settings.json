@@ -4,6 +4,16 @@
         "unistd.h": "c",
         "string.h": "c",
         "stdbool.h": "c",
-        "format": "c"
+        "format": "c",
+        "cstdlib": "c",
+        "stdio.h": "c",
+        "stdint.h": "c",
+        "*.tcc": "c",
+        "string": "c",
+        "istream": "c",
+        "streambuf": "c",
+        "cstdint": "c",
+        "thread": "cpp",
+        "vector": "cpp"
     }
 }

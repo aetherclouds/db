@@ -1,7 +1,11 @@
 .PHONY: run
-run: build
-	./meinsql
+run: build test
+	./meinsql run.db
+
+.PHONY: test
+test:
+	rspec
 
 .PHONY: build
 build:
-	gcc -fdiagnostics-color=always -Wall -Wextra -g src/meinsql.c -o meinsql -std=c2x
+	gcc src/meinsql.c -o meinsql -Werror -Wall -Wextra -g -std=c2x -fdiagnostics-color=always 
