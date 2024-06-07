@@ -1,5 +1,7 @@
+all: test run
+
 .PHONY: run
-run: build test
+run: build
 	./meinsql run.db
 
 .PHONY: test
@@ -8,4 +10,4 @@ test:
 
 .PHONY: build
 build:
-	gcc src/meinsql.c -o meinsql -Werror -Wall -Wextra -g -std=c2x -fdiagnostics-color=always 
+	cc src/meinsql.c -o meinsql -Werror -Wall -Wextra -g -std=c2x -fdiagnostics-color=always

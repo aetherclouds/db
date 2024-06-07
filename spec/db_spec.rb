@@ -10,7 +10,11 @@ describe 'database' do
         # open pipe subprocess with initial command, and read/write access, returns pipe
         IO.popen("./meinsql test.db --no-color", "r+") do |pipe|
             commands.each do |command|
-                pipe.puts command
+                begin
+                    pipe.puts command
+                rescue
+                    break
+                end
             end
 
             pipe.close_write # close stdin pipe, TODO: understand why this is needed (otherwise pipe.gets doesn't work)
@@ -104,9 +108,9 @@ describe 'database' do
             "db > constants:",
             "ROW_SIZE: 293",
             "COMMON_NODE_HEADER_SIZE: 6",
-            "LEAF_NODE_HEADER_SIZE: 10",
+            "LEAF_NODE_HEADER_SIZE: 14",
             "LEAF_NODE_CELL_SIZE: 297",
-            "LEAF_NODE_SPACE_FOR_CELLS: 4086",
+            "LEAF_NODE_SPACE_FOR_CELLS: 4082",
             "LEAF_NODE_MAX_CELLS: 13",
             "db > exiting",
         ]
@@ -145,6 +149,30 @@ describe 'database' do
         expect(result).to match_array([
             "db > executed",
             "db > failed to execute statement: duplicate key: 1",
+            "db > exiting",
+        ])
+    end
+
+    it "prints all rows in a multi-level tree" do
+        script = (1..15).map do |i|
+            "insert #{i} user#{i} user#{i}@example.com"
+        end
+        script << "select"
+        script << ".exit"
+
+        result = run_script(script)
+
+        expect(result).to match_array([
+            *(1..15).map do |i|
+                "db > executed"
+            end,
+            "db > 1 user1 user1@example.com",
+            *(2..15).map do |i|
+                "#{i} user#{i} user#{i}@example.com"
+            end,
+
+            # "db > executed",
+            "executed",
             "db > exiting",
         ])
     end
