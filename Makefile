@@ -1,13 +1,19 @@
-all: test run
+CC ?= gcc
+CFLAGS = -fms-extensions -std=c23
+CFLAGS += -Werror -Wall -Wextra -fdiagnostics-color=always
+# CFLAGS+=-g
+CFLAGS += -O3
 
-.PHONY: run
+
+all: build test run	
+
 run: build
 	./meinsql run.db
 
-.PHONY: test
 test:
 	rspec
 
-.PHONY: build
 build:
-	cc src/meinsql.c -o meinsql -Werror -Wall -Wextra -g -std=c2x -fdiagnostics-color=always
+	$(CC) src/meinsql.c -o meinsql $(CFLAGS)
+
+.PHONY: all run test build

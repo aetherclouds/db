@@ -16,6 +16,11 @@
         "thread": "cpp",
         "vector": "cpp",
         "common.h": "c",
-        "btree.h": "c"
-    }
+        "btree.h": "c",
+        "*.ipp": "c",
+        "__node_handle": "c",
+        "random": "c",
+        "stacktrace": "c"
+    },
+    "C_Cpp.errorSquiggles": "disabled"
 }

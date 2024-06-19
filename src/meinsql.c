@@ -33,49 +33,10 @@ typedef struct {
 
 typedef struct {
     char* buffer;
-    // TODO: understand why this is larger than input
     size_t buffer_length; // size of buffer allocated; buffer_length >= input_length
     ssize_t input_length; // signed because that's getline's return type
 } InputBuffer;
 
-
-bool use_color = true;
-
-
-void* get_page(Pager* pager, uint32_t page_num) {
-    if (page_num > TABLE_MAX_PAGES) {
-        log("tried to fetch a page number larger than max. allowed: %d > %d", page_num, TABLE_MAX_PAGES);
-        exit(EXIT_FAILURE);
-    }
-    if (pager->pages[page_num] == NULL) {
-        // cache miss; load or create new page
-        void* page = malloc(PAGE_SIZE);
-        uint32_t num_pages = pager->file_length / PAGE_SIZE;
-        // there may be an extra, partial page
-        if (pager->file_length % PAGE_SIZE) {
-            num_pages += 1;
-        }
-        // we're requesting a page that's within num_pages, so it must exist on disk but not in memory. load it.
-        // (reminder that pages are 0 indexed so we check for equality as well)
-        if (page_num < num_pages) {
-            uint32_t offset = page_num * PAGE_SIZE;
-            lseek(pager->file_descriptor, offset, SEEK_SET);
-            // we don't have to check if it crosses file size - implementation should set off-bounds bytes to 0
-            ssize_t bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
-            if (bytes_read == -1) {
-                printf("error reading file: %d", errno);
-                exit(EXIT_FAILURE);
-            }
-        }
-        // are we creating a new page? if so, increment page count
-        // we can't use `num_pages` here because it's reliant on filesize. we may not have flushed existing new pages yet.
-        if (page_num >= pager->num_pages) {
-            pager->num_pages = page_num + 1;
-        }
-        pager->pages[page_num] = page;
-    }
-    return pager->pages[page_num];
-}
 
 Pager* pager_open(const char* filename) {
     int fd = open(filename,
@@ -88,7 +49,7 @@ Pager* pager_open(const char* filename) {
     }
 
     off_t file_length = lseek(fd, 0, SEEK_END);
-    Pager* pager = malloc(sizeof(Pager));
+    Pager* pager = malloc(sizeof *pager);
     pager->file_descriptor = fd;
     pager->file_length = file_length;
     pager->num_pages = file_length / PAGE_SIZE;
@@ -124,34 +85,25 @@ void pager_flush(Pager* pager, uint32_t page_num) {
     }
 }
 
-uint32_t get_unused_page_num(Pager* pager) {
-    // append new page to end of database file for now
-    return pager->num_pages;
-}
-
+/*
+returns a cursor pointing to a cell with matching key,
+or if key wasn't found, the cell we could insert into.
+*/
 Cursor* table_find(Table* table, uint32_t key) {
-    /*
-    returns a cursor pointing to a cell with matching key,
-    or if key wasn't found, the cell we could insert into.
-    */
     uint32_t root_page_num = table->root_page_num;
-    // page == node
-    void* root_node = get_page(table->pager, root_page_num);
-
-    if (get_node_type(root_node) == NODE_LEAF) {
-        return leaf_node_find(table, root_page_num, key);
-    } else {
+    Node* root_node = get_page(table->pager, root_page_num);
+    if (root_node->common_header.type == NODE_INTERNAL) {
         return internal_node_find_leaf(table, root_page_num, key);
-        log("TODO: implement internal search");
-        exit(EXIT_FAILURE);
+    } else {
+        return leaf_node_find(table, root_page_num, key);
     }
 }
 
 Cursor* table_start(Table* table) {
     Cursor* cursor = table_find(table, 0);
     // NOTE: should probably place this code inside leaf_node_find
-    void* first_node = get_page(table->pager, cursor->page_num);
-    uint32_t num_cells = *leaf_node_num_cells(first_node);
+    LeafNode* first_leaf = (LeafNode*)get_page(table->pager, cursor->page_num);
+    uint32_t num_cells = first_leaf->num_cells;
     cursor->end_of_table = (num_cells == 0);
     return cursor;
 }
@@ -159,12 +111,11 @@ Cursor* table_start(Table* table) {
 Cursor* table_end(Table* table) {
     // remember that `table_end` takes us to one step *past* the end of the table (where it's safe to insert).
     // this means that, for example, if current page has a limit number of cells, we'll be at limit+1
-    Cursor* cursor = malloc(sizeof(Cursor));
+    Cursor* cursor = malloc(sizeof *cursor);
     cursor->table = table;
     cursor->page_num = table->root_page_num;
-    void* root_node = get_page(table->pager, table->root_page_num);
-    uint32_t num_cells = *leaf_node_num_cells(root_node);
-    cursor->cell_num = num_cells;
+    LeafNode* last_leaf = (LeafNode*)get_page(table->pager, table->root_page_num);
+    cursor->cell_num = last_leaf->num_cells;
     cursor->end_of_table = true;
 
     return cursor;
@@ -173,15 +124,15 @@ Cursor* table_end(Table* table) {
 Table* db_open(const char* filename) {
     Pager* pager = pager_open(filename);
 
-    Table* table = (Table*)malloc(sizeof(Table));
+    Table* table = (Table*)malloc(sizeof *table);
     table->pager = pager;
     table->root_page_num = 0;
 
     if (pager->num_pages == 0) {
         // new file - initialize page 0 as leaf node
-        void* root_node = get_page(table->pager, 0);
+        LeafNode* root_node = (LeafNode*)get_page(table->pager, 0);
         initialize_leaf_node(root_node);
-        set_node_root(root_node, true);
+        root_node->is_root = true;
     }
     return table;
 }
@@ -203,26 +154,33 @@ void db_close(Table* table) {
         exit(EXIT_FAILURE);
     }
     // I don't get why we free all pages *again* on this part of the tutorial, so I'll just ignore it
-    // ...
     free(pager);
     free(table);
 }
 
-void* cursor_value(Cursor* cursor){
-    // get pointer to current row, create new page if needed.
+// get pointer to current row, create new page if needed.
+SerializedRow* cursor_value(Cursor* cursor){
     uint32_t page_num = cursor->page_num;
-    void* page = get_page(cursor->table->pager, page_num);
-    return leaf_node_value(page, cursor->cell_num);
+    LeafNode* page = (LeafNode*)get_page(cursor->table->pager, page_num);
+    return &(page->cells[cursor->cell_num]);
 }
 
+/* 
+navigates leaf nodes.
+if given cursor is at the last cell, goes to the 1st cell of the next node.
+otherwise, goes to the next cell of the same node.
+*/
 void cursor_advance(Cursor* cursor){
     uint32_t page_num = cursor->page_num;
-    void* node = get_page(cursor->table->pager, page_num);
+    LeafNode* node = (LeafNode*)get_page(cursor->table->pager, page_num);
     cursor->cell_num += 1;
-    if (cursor->cell_num >= *leaf_node_num_cells(node)) {
-        uint32_t next_page = *leaf_node_next_leaf(node);
-        /* FIXME: either mark page 0 as root always or find way to check if
-        value is root node (we don't care) vs actually uninitialized (we care about this), meaning end of table. */
+    if (cursor->cell_num >= node->num_cells) {
+        uint32_t next_page = node->next_leaf;
+        /* NOTE: 
+        an uninitialized `next_page` being set to 0 is only safe IFF `root_page_num == 0` always.
+        if so, it's safe because `cursor_advance` navigates leaf pages. if there is more than one
+        page, `root_node` is not a leaf node, so we can use it as an initializer.
+        */
         if (next_page) {
             cursor->page_num = next_page;
             cursor->cell_num = 0;
@@ -234,12 +192,13 @@ void cursor_advance(Cursor* cursor){
 
 void print_row(Row* row){
     printf("%d %s %s\n",row->id, row->username, row->email);
-    // TODO: WHY DOES THIS WORK?? // printf("%*d %*s %*s\n", row->id,  row->username, 25, row->email, 255);
+    // RESEARCH: WHY DOES THIS WORK?? // printf("%*d %*s %*s\n", row->id,  row->username, 25, row->email, 255);
 }
 
-void print_constants() {
+void print_constants(void) {
     printf("ROW_SIZE: %d\n", ROW_SIZE);
     printf("COMMON_NODE_HEADER_SIZE: %d\n", COMMON_NODE_HEADER_SIZE);
+    printf("INTERNAL_NODE_MAX_KEYS: %d\n", INTERNAL_NODE_MAX_KEYS);
     printf("LEAF_NODE_HEADER_SIZE: %d\n", LEAF_NODE_HEADER_SIZE);
     printf("LEAF_NODE_CELL_SIZE: %d\n", LEAF_NODE_CELL_SIZE);
     printf("LEAF_NODE_SPACE_FOR_CELLS: %d\n", LEAF_NODE_SPACE_FOR_CELLS);
@@ -248,46 +207,40 @@ void print_constants() {
 
 // use a pager and page_num instead of a cursor because it's recursive - we'd have to copy cursor for each level
 void print_tree(Pager* pager, uint32_t page_num, uint32_t indent_level) {
-    void* node = get_page(pager, page_num);
+    Node* _node = get_page(pager, page_num);
 
     // indent(indent_level);
-    printf("page %d; ", page_num);
-    if (is_node_root(node)) {
-        printf("root; ");
-    }
-    uint32_t num_items;
-    switch (get_node_type(node)) {
-    case NODE_INTERNAL:
-        num_items = *leaf_node_num_cells(node);
-        printf("internal; %d keys\n", num_items);
+    printf("page %d/%d; ", page_num, TABLE_MAX_PAGES);
+    if (_node->common_header.is_root) printf("root; ");
+    switch (_node->common_header.type) {
+    case NODE_INTERNAL: {
+        InternalNode* node = (InternalNode*)_node;
+        printf("internal; %d/%d keys\n", node->num_keys, INTERNAL_NODE_MAX_KEYS);
         // N keys == N+1 children
-        for (uint32_t i = 0; i < num_items; i++) {
+        for (uint32_t i = 0; i < node->num_keys; i++) {
             indent(indent_level+1);
-            uint32_t child_page_num = *internal_node_child(node, i);
-            uint32_t child_key = *internal_node_key(node, i);
-            printf("+ key %d; ", child_key);
-            print_tree(pager, child_page_num, indent_level+1);
+            printf("+ key %d; ", node->_cells[i].key);
+            print_tree(pager, node->_cells[i].child, indent_level+1);
         }
         indent(indent_level+1);
         printf("+ ");
-        uint32_t last_child_page_num = *internal_node_last_child(node);
-        print_tree(pager, last_child_page_num, indent_level+1);
+        print_tree(pager, node->last_child, indent_level+1);
         break;
-    case NODE_LEAF:
-        num_items = *leaf_node_num_cells(node);
-        printf("leaf; %d keys\n", num_items);
-        for (uint32_t i = 0; i < num_items; i++) {
+    } case NODE_LEAF: {
+        LeafNode* node = (LeafNode*)_node;
+        printf("leaf; %d/%d keys\n", node->num_cells, LEAF_NODE_MAX_CELLS);
+        for (uint32_t i = 0; i < node->num_cells; i++) {
             indent(indent_level+1);
-            printf("- key %d\n", *leaf_node_key(node, i));
+            printf("- key %d\n", node->cells[i].key);
         }
         break;
-    }
+    }}
 }
 
-void print_prompt() { printf("db > ");}
+void print_prompt(void) { printf("db > ");}
 
-InputBuffer* new_input_buffer(){
-    InputBuffer* input_buffer = (InputBuffer*)malloc(sizeof(InputBuffer));
+InputBuffer* new_input_buffer(void){
+    InputBuffer* input_buffer = malloc(sizeof *input_buffer);
     input_buffer->buffer = NULL;
     input_buffer->buffer_length = 0;
     input_buffer->input_length = 0;
@@ -324,7 +277,7 @@ MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table* table) {
         printf("constants:\n");
         print_constants();
         return META_COMMAND_SUCCESS;
-    } else if (strncmp(input_buffer->buffer, ".btree", 6) == 0) {
+} else if (strncmp(input_buffer->buffer, ".btree", 6) == 0) {
         print_tree(table->pager, table->root_page_num, 0);
         return META_COMMAND_SUCCESS;
     }
@@ -373,8 +326,7 @@ PrepareResult prepare_statement(InputBuffer* input_buffer, Statement* statement)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 ExecuteResult execute_select(Statement* statement, Table* table){
-#pragma GCC diagnostic pop
-    // NOTE: selecting all rows, for now
+#pragma GCC diagnostic pop    // NOTE: selecting all rows, for now
     Row row;
     Cursor* cursor = table_start(table);
     while (!(cursor->end_of_table)) {
@@ -390,11 +342,10 @@ ExecuteResult execute_insert(Statement* statement, Table* table){
     uint32_t key_to_insert = row_to_insert->id;
     Cursor* cursor = table_find(table, key_to_insert);
 
-    void* node = get_page(table->pager, cursor->page_num);
-    uint32_t num_cells = *leaf_node_num_cells(node);
+    LeafNode* node = (LeafNode*)get_page(table->pager, cursor->page_num);
 
-    if (cursor->cell_num < num_cells) { // inserting between
-        uint32_t key_at_index = *leaf_node_key(node, cursor->cell_num);
+    if (cursor->cell_num < node->num_cells) { // inserting between
+        uint32_t key_at_index = node->cells[cursor->cell_num].key;
         if (key_at_index == key_to_insert) return EXECUTE_DUPLICATE_KEY;
     }
 
@@ -407,10 +358,8 @@ ExecuteResult execute_statement(Statement* statement, Table* table){
     switch (statement->type){
         case STATEMENT_INSERT:
             return execute_insert(statement, table);
-            break;
         case STATEMENT_SELECT:
             return execute_select(statement, table);
-            break;
         default:
             log("no case match");
             exit(EXIT_FAILURE);
