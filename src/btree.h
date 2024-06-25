@@ -30,7 +30,7 @@ allocate new page for left node, point both nodes to new root.
 we do this instead of allocating a new root and not copying over memory,
 so that table->root_page_num can stay the same forever.
 */
-void    create_new_root(Table* table, uint32_t new_child_page_num) {
+void create_new_root(Table* table, uint32_t new_child_page_num) {
     // RESEARCH: could also request a new page and point new root node there, rather than memcpy
     uint32_t old_child_new_page_num = get_unused_page_num(table->pager);
 

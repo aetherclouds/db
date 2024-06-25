@@ -168,7 +168,7 @@ void serialize_row(Row* source, SerializedRow* destination) {
     memcpy((void*)destination + EMAIL_OFFSET,      &(source->email),   EMAIL_SIZE);
 }
 
-void deserialize_row(void* source, Row* destination) {
+void deserialize_row(SerializedRow* source, Row* destination) {
     memcpy(&(destination->id),      (void*)source + ID_OFFSET,        ID_SIZE);
     memcpy(&(destination->username), (void*)source + USERNAME_OFFSET,  USERNAME_SIZE);
     memcpy(&(destination->email),    (void*)source + EMAIL_OFFSET,     EMAIL_SIZE);
@@ -181,7 +181,7 @@ Node* get_page(Pager* pager, uint32_t page_num) {
     }
     if (pager->pages[page_num] == NULL) {
         // cache miss; load or create new page
-        void* page = malloc(PAGE_SIZE);
+        void* page = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
         uint32_t num_pages = pager->file_length / PAGE_SIZE;
         // there may be an extra, partial page
         if (pager->file_length % PAGE_SIZE) {
