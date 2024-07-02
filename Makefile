@@ -1,19 +1,26 @@
-CC ?= gcc
-CFLAGS = -fms-extensions -std=c23
-CFLAGS += -Werror -Wall -Wextra -fdiagnostics-color=always
-# CFLAGS+=-g
-CFLAGS += -O3
+NAME 	:= meinsql
+CC 		:= gcc
+CFLAGS 	:= -fms-extensions -std=c23
+CFLAGS 	+= -Werror -Wall -Wextra -fdiagnostics-color=always
+CRFLAGS += -O3 # release
+CDFLAGS += -g # debug
 
 
-all: build test run	
+all: $(NAME) test run	
 
-run: build
-	./meinsql run.db
+$(NAME): build
 
-test:
+run: $(NAME)
+	./$(NAMME) run.db
+
+test: $(NAME)
 	rspec
 
-build:
-	$(CC) src/meinsql.c -o meinsql $(CFLAGS)
+build: src/main.c
+	$(CC) src/main.c -o meinsql $(CFLAGS) $(CBFLAGS)
+	
+debug:
+	$(CC) src/main.c -o meinsql $(CFLAGS) $(CDFLAGS)
+	$(MAKE) test
 
-.PHONY: all run test build
+.PHONY: all run test build debug

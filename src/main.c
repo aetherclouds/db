@@ -264,8 +264,8 @@ void read_input(InputBuffer* input_buffer){
     }
 
     // remove newline
-    // we can concat string by setting a new null termnator
     input_buffer->input_length = bytes_read-1;
+    // we can concat string by setting a new null termnator
     input_buffer->buffer[bytes_read-1] = '\0';
 }
 
